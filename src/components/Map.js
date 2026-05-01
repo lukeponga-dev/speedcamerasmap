@@ -79,7 +79,7 @@ function haversine(lat1, lng1, lat2, lng2) {
 }
 
 // ── GPS Location Controller ───────────────────────────────────────────────────
-function GPSController({ enabled, setUserPos, trafficCameras, onProximityAlert }) {
+function GPSController({ enabled, setUserPos, trafficCameras, safetyCameras, onProximityAlert }) {
   const map = useMap();
   const circleRef    = useRef(null);
   const markerRef    = useRef(null);
@@ -129,13 +129,16 @@ function GPSController({ enabled, setUserPos, trafficCameras, onProximityAlert }
             .bindPopup(`<b>Your Location</b><br>Accuracy: ±${Math.round(accuracy)}m`);
         }
 
-        // Proximity alerts – fire once per camera within 5 km
-        trafficCameras.forEach((cam) => {
+        // Proximity alerts – fire once per camera within 3 km
+        const allCams = [...trafficCameras, ...safetyCameras];
+        allCams.forEach((cam) => {
           const dist = haversine(latlng.lat, latlng.lng, cam.latitude, cam.longitude);
-          if (dist < 5 && !alertedRef.current.has(cam.id)) {
+          if (dist < 3 && !alertedRef.current.has(cam.id)) {
             alertedRef.current.add(cam.id);
             onProximityAlert({
-              name:    cam.name,
+              id:      cam.id,
+              name:    cam.name || cam.location || (cam.type + ' Camera'),
+              type:    cam.type || 'Traffic',
               dist:    dist.toFixed(1),
               latlng:  cam,
             });
@@ -152,6 +155,25 @@ function GPSController({ enabled, setUserPos, trafficCameras, onProximityAlert }
       if (markerRef.current)  map.removeLayer(markerRef.current);
     };
   }, [enabled]);
+
+  return null;
+}
+
+// ── Nearest Camera Tracker ────────────────────────────────────────────────────
+function NearestCameraTracker({ userPos, safetyCameras, onNearestUpdate }) {
+  useEffect(() => {
+    if (!userPos || !safetyCameras.length) return;
+
+    const sorted = [...safetyCameras]
+      .map(cam => ({
+        ...cam,
+        dist: haversine(userPos.lat, userPos.lng, cam.latitude, cam.longitude)
+      }))
+      .sort((a, b) => a.dist - b.dist);
+
+    const nearest = sorted[0];
+    onNearestUpdate(nearest.dist < 5 ? nearest : null); // Only track if within 5km
+  }, [userPos, safetyCameras]);
 
   return null;
 }
@@ -238,63 +260,94 @@ function CameraPopup({ cam, type }) {
     catch { return 'Recently'; }
   }, [cam.updatedAt]);
 
+  const handleNavigate = () => {
+    const dest = { lat: cam.latitude, lng: cam.longitude, name: cam.name || cam.location };
+    document.dispatchEvent(new CustomEvent('startNavTo', { detail: dest }));
+  };
+
   return (
-    <div style={{ padding: 0, minWidth: '280px', overflow: 'hidden' }}>
+    <div style={{ padding: 0, minWidth: '300px', overflow: 'hidden' }}>
       {/* Header */}
-      <div style={{ padding: '12px', borderBottom: '1px solid var(--glass-border)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px',
+      <div style={{ padding: '16px', borderBottom: '1px solid var(--glass-border)', background: 'rgba(255,255,255,0.02)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px',
             color: type === 'traffic' ? 'var(--primary)' : (cam.type === 'Speed' ? 'var(--danger)' : 'var(--warning)') }}>
-            {type === 'traffic' ? <Camera size={18}/> : <AlertTriangle size={18}/>}
-            <strong style={{ fontSize: '1.1em' }}>{cam.name || cam.type + ' Camera'}</strong>
+            {type === 'traffic' ? <Camera size={20}/> : <AlertTriangle size={20}/>}
+            <strong style={{ fontSize: '1.15em', letterSpacing: '-0.3px' }}>{cam.name || cam.type + ' Camera'}</strong>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <div className="pulse-dot"></div>
-            <span style={{ fontSize: '0.7em', textTransform: 'uppercase', opacity: 0.8 }}>Live</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div className="pulse-dot" style={{ width: 6, height: 6 }}></div>
+            <span style={{ fontSize: '0.65em', textTransform: 'uppercase', fontWeight: 800, letterSpacing: '0.5px', opacity: 0.8 }}>Live</span>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.8em', color: '#888' }}>
-          <MapPin size={12}/><span>{cam.description || cam.location}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85em', color: '#aaa' }}>
+          <MapPin size={14} style={{ flexShrink: 0 }}/>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cam.description || cam.location}</span>
         </div>
       </div>
 
       {/* Image */}
-      <div style={{ width: '100%', height: '180px', background: '#000', position: 'relative' }}>
+      <div style={{ width: '100%', height: '200px', background: '#000', position: 'relative', overflow: 'hidden' }}>
         {!imgLoaded && !isUnavailable && <div className="skeleton" style={{ width: '100%', height: '100%' }}/>}
         {isUnavailable ? (
           <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center', background: '#1a1a1a', padding: '20px', textAlign: 'center' }}>
-            <Info size={32} style={{ color: '#555', marginBottom: '8px' }}/>
-            <p style={{ fontSize: '0.85em', color: '#888' }}>Feed temporarily unavailable</p>
+            alignItems: 'center', justifyContent: 'center', background: '#0f0f12', padding: '24px', textAlign: 'center' }}>
+            <Info size={40} style={{ color: '#333', marginBottom: '12px' }}/>
+            <p style={{ fontSize: '0.9em', color: '#666', fontWeight: 500 }}>Feed temporarily offline</p>
           </div>
         ) : (
           <img
             src={cam.imageUrl} alt={cam.name}
             onLoad={() => setImgLoaded(true)}
             style={{ width: '100%', height: '100%', objectFit: 'cover',
-              opacity: imgLoaded ? 1 : 0, transition: 'opacity 0.3s' }}
-            onError={(e) => { e.target.src = 'https://via.placeholder.com/600x400/1a1a1a/666?text=Unavailable'; }}
+              opacity: imgLoaded ? 1 : 0, transition: 'opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+              filter: 'contrast(1.1) brightness(0.9)' }}
+            onError={(e) => { e.target.src = 'https://via.placeholder.com/600x400/0f0f12/666?text=Unavailable'; }}
           />
         )}
       </div>
 
-      {/* Footer */}
-      <div style={{ padding: '12px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-          <span style={{ fontSize: '0.8em', color: '#888' }}>{timeAgo}</span>
-          <button style={{ fontSize: '0.8em', color: '#666', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <Flag size={12}/> Report
+      {/* Footer / Actions */}
+      <div style={{ padding: '16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <span style={{ fontSize: '0.8em', color: '#777', fontWeight: 500 }}>{timeAgo}</span>
+          <button style={{ fontSize: '0.8em', color: '#555', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
+            <Flag size={14}/> Report Issue
           </button>
         </div>
-        {cam.type && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            background: 'rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px' }}>
-            <span style={{ fontSize: '0.9em' }}>Speed Limit:</span>
-            <span style={{ fontWeight: 'bold', border: '2px solid red', borderRadius: '50%',
-              width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: 'white', fontSize: '0.8em' }}>{cam.speedLimit}</span>
-          </div>
-        )}
+        
+        <div style={{ display: 'flex', gap: '10px' }}>
+          {cam.speedLimit && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1,
+              background: 'rgba(255,255,255,0.03)', padding: '8px 12px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
+              <span style={{ fontSize: '0.85em', color: '#888', fontWeight: 500 }}>Limit</span>
+              <span style={{ fontWeight: 800, border: '2px solid var(--danger)', borderRadius: '50%',
+                width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'white', fontSize: '0.9em', boxShadow: '0 0 10px rgba(239, 68, 68, 0.3)' }}>{cam.speedLimit}</span>
+            </div>
+          )}
+          
+          <button 
+            onClick={handleNavigate}
+            style={{
+              flex: 2,
+              background: 'linear-gradient(135deg, var(--primary), var(--primary-hover))',
+              color: 'white',
+              borderRadius: '12px',
+              padding: '10px',
+              fontSize: '0.9em',
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              boxShadow: '0 4px 12px var(--primary-glow)'
+            }}
+          >
+            <Navigation size={18} />
+            Navigate
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -308,18 +361,29 @@ function ProximityToast({ alert, onDismiss }) {
   }, []);
 
   return (
-    <div className="proximity-alert">
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
-        <span style={{ fontSize: '1.5em' }}>📡</span>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: '0.9em', color: 'var(--warning)', marginBottom: '4px' }}>
-            Camera Nearby
+    <div className="proximity-alert" style={{ 
+      borderColor: alert.type === 'Speed' ? 'var(--danger)' : 'rgba(245, 158, 11, 0.4)',
+      background: alert.type === 'Speed' ? 'rgba(239, 68, 68, 0.15)' : 'var(--glass)'
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+        <div style={{ 
+          background: alert.type === 'Speed' ? 'var(--danger)' : 'var(--warning)', 
+          padding: '8px', borderRadius: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' 
+        }}>
+          {alert.type === 'Speed' ? <AlertTriangle size={20} color="white" /> : <Camera size={20} color="white" />}
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 800, fontSize: '0.85em', color: alert.type === 'Speed' ? 'var(--danger)' : 'var(--warning)', marginBottom: '2px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            {alert.type} Camera Nearby
           </div>
-          <div style={{ fontSize: '0.82em', color: '#ccc' }}>
-            <strong style={{ color: 'white' }}>{alert.name}</strong> is {alert.dist} km away.
+          <div style={{ fontSize: '0.9em', color: 'white', fontWeight: 600 }}>
+            {alert.name}
+          </div>
+          <div style={{ fontSize: '0.75em', color: '#aaa', marginTop: '4px' }}>
+            Distance: <strong style={{ color: 'white' }}>{alert.dist} km</strong>
           </div>
         </div>
-        <button onClick={onDismiss} style={{ marginLeft: 'auto', color: '#555', fontSize: '1em' }}>✕</button>
+        <button onClick={onDismiss} style={{ color: '#555', padding: '4px' }}><XIcon size={16} /></button>
       </div>
     </div>
   );
@@ -457,8 +521,174 @@ function LiveNavController({ dest, userPos, onTurnInfo, onArrival, active }) {
 }
 
 
+// ── Incident icon factory ─────────────────────────────────────────────────────
+const getIncidentIcon = (type, severity) => {
+  const emoji = type === 'Crash'      ? '💥'
+              : type === 'Roadworks'  ? '🚧'
+              : type === 'Road Closure' ? '🚫'
+              : type === 'Weather'    ? '❄️'
+              : type === 'Congestion' ? '🚗'
+              : '⚠️';
+
+  const bg = severity === 'Road Closure' ? '#dc2626'
+            : severity === 'Major'       ? '#f97316'
+            : severity === 'Moderate'    ? '#eab308'
+            : '#6b7280'; // Minor
+
+  return L.divIcon({
+    className: '',
+    html: `<div style="
+      width: 36px; height: 36px; border-radius: 50%;
+      background: ${bg};
+      border: 3px solid white;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; line-height: 1;
+    ">${emoji}</div>`,
+    iconSize:    [36, 36],
+    iconAnchor:  [18, 18],
+    popupAnchor: [0, -20],
+  });
+};
+
+// ── Incident popup component ──────────────────────────────────────────────────
+function IncidentPopup({ incident }) {
+  const severityColor = incident.severity === 'Road Closure' ? 'var(--danger)'
+                      : incident.severity === 'Major'        ? '#f97316'
+                      : incident.severity === 'Moderate'     ? '#eab308'
+                      : '#6b7280';
+
+  const handleNavigate = () => {
+    document.dispatchEvent(new CustomEvent('startNavTo', {
+      detail: { lat: incident.latitude, lng: incident.longitude, name: incident.location }
+    }));
+  };
+
+  return (
+    <div style={{ padding: 0, minWidth: '280px' }}>
+      {/* Header */}
+      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--glass-border)', background: 'rgba(255,255,255,0.02)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '1.2em' }}>
+              {incident.type === 'Crash' ? '💥' : incident.type === 'Roadworks' ? '🚧' : incident.type === 'Road Closure' ? '🚫' : incident.type === 'Weather' ? '❄️' : '⚠️'}
+            </span>
+            <strong style={{ fontSize: '1.05em', color: 'white' }}>{incident.type}</strong>
+          </div>
+          <span style={{
+            background: severityColor, color: 'white', fontSize: '0.7em', fontWeight: 800,
+            padding: '3px 10px', borderRadius: '20px', textTransform: 'uppercase', letterSpacing: '0.5px'
+          }}>{incident.severity}</span>
+        </div>
+        <div style={{ fontSize: '0.82em', color: '#aaa', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <MapPin size={12} />
+          {incident.location}
+        </div>
+      </div>
+
+      {/* Description */}
+      <div style={{ padding: '14px 16px' }}>
+        <p style={{ fontSize: '0.85em', color: '#ccc', lineHeight: 1.5, margin: '0 0 14px 0' }}>
+          {incident.description}
+        </p>
+        <button
+          onClick={handleNavigate}
+          style={{
+            width: '100%', background: 'linear-gradient(135deg, var(--primary), var(--primary-hover))',
+            color: 'white', borderRadius: '12px', padding: '10px', fontSize: '0.9em', fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+            boxShadow: '0 4px 12px var(--primary-glow)'
+          }}
+        >
+          <Navigation size={16} /> Avoid This Route
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Police station icon factory ───────────────────────────────────────────────
+const getPoliceIcon = (type) => {
+  const emoji = type === 'Traffic Police'   ? '🚔'
+              : type === 'Dog Unit'         ? '🐕'
+              : type === 'Marine Unit'      ? '⛵'
+              : type === 'Airport Police'   ? '✈️'
+              : type === 'Community Station'? '🏠'
+              : '🚨';
+
+  return L.divIcon({
+    className: '',
+    html: `<div style="
+      width: 34px; height: 34px; border-radius: 10px;
+      background: linear-gradient(135deg, #1d4ed8, #1e40af);
+      border: 2.5px solid #93c5fd;
+      box-shadow: 0 4px 16px rgba(29,78,216,0.6);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; line-height: 1;
+    ">${emoji}</div>`,
+    iconSize:    [34, 34],
+    iconAnchor:  [17, 17],
+    popupAnchor: [0, -20],
+  });
+};
+
+// ── Police station popup component ────────────────────────────────────────────
+function PolicePopup({ station }) {
+  const emoji = station.type === 'Traffic Police'   ? '🚔'
+              : station.type === 'Dog Unit'         ? '🐕'
+              : station.type === 'Marine Unit'      ? '⛵'
+              : station.type === 'Airport Police'   ? '✈️'
+              : station.type === 'Community Station'? '🏠'
+              : '🚨';
+
+  return (
+    <div style={{ padding: 0, minWidth: '280px' }}>
+      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--glass-border)', background: 'rgba(29,78,216,0.08)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+          <span style={{ fontSize: '1.4em' }}>{emoji}</span>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: '1em', color: 'white', lineHeight: 1.2 }}>{station.name}</div>
+            <div style={{ fontSize: '0.72em', color: '#93c5fd', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '2px' }}>{station.type}</div>
+          </div>
+        </div>
+        {station.district && (
+          <div style={{ fontSize: '0.78em', color: '#888', display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <MapPin size={11} />{station.district}
+          </div>
+        )}
+      </div>
+      <div style={{ padding: '14px 16px' }}>
+        {station.address && (
+          <div style={{ fontSize: '0.82em', color: '#ccc', marginBottom: '10px', display: 'flex', gap: '8px' }}>
+            <MapPin size={13} style={{ flexShrink: 0, marginTop: '2px', color: '#93c5fd' }} />
+            <span>{station.address}</span>
+          </div>
+        )}
+        {station.phone && (
+          <div style={{ fontSize: '0.82em', color: '#ccc', marginBottom: '10px', display: 'flex', gap: '8px' }}>
+            <span>📞</span>
+            <a href={`tel:${station.phone}`} style={{ color: '#93c5fd', fontWeight: 600 }}>{station.phone}</a>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
+          <span style={{
+            fontSize: '0.7em', fontWeight: 800, padding: '3px 10px', borderRadius: '20px',
+            background: 'rgba(29,78,216,0.3)', color: '#93c5fd', border: '1px solid rgba(29,78,216,0.4)'
+          }}>{station.openingHours}</span>
+          {station.emergency === 'yes' && (
+            <span style={{
+              fontSize: '0.7em', fontWeight: 800, padding: '3px 10px', borderRadius: '20px',
+              background: 'rgba(239,68,68,0.2)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)'
+            }}>Emergency ✓</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Map ──────────────────────────────────────────────────────────────────
-export default function Map({ trafficCameras, safetyCameras, filters }) {
+export default function Map({ trafficCameras, safetyCameras, incidents = [], policeStations = [], filters }) {
   const [mounted, setMounted]           = useState(false);
   const [gpsEnabled, setGpsEnabled]     = useState(false);
   const [waypointMode, setWaypointMode] = useState(false);
@@ -466,6 +696,8 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
   const [userPos, setUserPos]           = useState(null);
   const [proximityAlert, setProximityAlert] = useState(null);
   const [searchInput, setSearchInput]   = useState('');
+  const [suggestions, setSuggestions]   = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [pendingQuery, setPendingQuery] = useState(null);
   const [routeResult, setRouteResult]   = useState(null);
   const [routeError, setRouteError]     = useState(null);
@@ -475,10 +707,62 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
   const [turnInfo, setTurnInfo]         = useState(null);   // {totalKm, totalMins, nextText, nextDistM, allSteps}
   const [arrived, setArrived]           = useState(false);
   const [showFullRouteSteps, setShowFullRouteSteps] = useState(false);
+  const [nearestCam, setNearestCam]     = useState(null);
   const searchRef = useRef(null);
   const mapRef = useRef(null);
 
   useEffect(() => { setMounted(true); }, []);
+
+  // Listen for 'focusCamera' events from sidebar
+  useEffect(() => {
+    const handler = (e) => {
+      const cam = e.detail;
+      if (mapRef.current) {
+        mapRef.current.flyTo([cam.latitude, cam.longitude], 16, {
+          duration: 1.5,
+          easeLinearity: 0.25
+        });
+      }
+    };
+    document.addEventListener('focusCamera', handler);
+    return () => document.removeEventListener('focusCamera', handler);
+  }, []);
+
+  // Listen for 'startNavTo' events from popups
+  useEffect(() => {
+    const handler = (e) => {
+      const dest = e.detail;
+      setNavDest(dest);
+      setRouteResult(dest.name);
+      setSearchInput(dest.name);
+      startNavigation();
+    };
+    document.addEventListener('startNavTo', handler);
+    return () => document.removeEventListener('startNavTo', handler);
+  }, []);
+
+  // Search autocomplete logic
+  useEffect(() => {
+    if (searchInput.length < 3) {
+      setSuggestions([]);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchInput)}&countrycodes=nz&limit=5`)
+        .then(r => r.json())
+        .then(data => {
+          setSuggestions(data.map(item => ({
+            name: item.display_name,
+            lat: parseFloat(item.lat),
+            lng: parseFloat(item.lon)
+          })));
+        })
+        .catch(err => console.error("Search suggestion error:", err));
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
   const clearWaypoints = useCallback(() => {
     waypoints.forEach(wp => {
@@ -543,76 +827,115 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
       <div className="search-header">
         <div style={{ width: '90%', maxWidth: '440px', position: 'relative' }}>
           <div className="glass-panel" style={{
-            borderRadius: '999px',
-            display: 'flex', alignItems: 'center', gap: '8px',
-            padding: '8px 16px',
+            borderRadius: '16px',
+            display: 'flex', alignItems: 'center', gap: '12px',
+            padding: '10px 16px',
             border: '1px solid var(--glass-border)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+            transition: 'all 0.3s ease'
           }}>
-            <Search size={18} color="#555" style={{ flexShrink: 0 }} />
+            <Search size={20} color="var(--primary)" style={{ flexShrink: 0, opacity: 0.8 }} />
             <input
               ref={searchRef}
               type="text"
               value={searchInput}
               placeholder="Search destination in NZ…"
-              onChange={e => setSearchInput(e.target.value)}
+              onChange={e => { setSearchInput(e.target.value); setShowSuggestions(true); }}
+              onFocus={() => setShowSuggestions(true)}
               onKeyDown={e => e.key === 'Enter' && submitSearch()}
               style={{
                 flex: 1, background: 'transparent', border: 'none', outline: 'none',
-                color: 'white', fontSize: '0.95em', fontFamily: 'inherit',
+                color: 'white', fontSize: '1em', fontWeight: 500, fontFamily: 'inherit',
               }}
             />
             {searchInput && (
-              <button onClick={clearSearch} style={{ color: '#555', display: 'flex' }}>
-                <XIcon size={16}/>
+              <button onClick={clearSearch} style={{ color: '#666', display: 'flex', padding: '4px' }}>
+                <XIcon size={18}/>
               </button>
             )}
             <button
               onClick={submitSearch}
               style={{
-                background: 'var(--primary)', borderRadius: '999px',
-                padding: '6px 14px', fontSize: '0.8em', fontWeight: 600,
-                color: 'white', display: 'flex', alignItems: 'center', gap: '4px',
-                flexShrink: 0,
+                background: 'linear-gradient(135deg, var(--primary), var(--primary-hover))',
+                borderRadius: '10px',
+                padding: '8px 16px', fontSize: '0.85em', fontWeight: 700,
+                color: 'white', display: 'flex', alignItems: 'center', gap: '6px',
+                flexShrink: 0, boxShadow: '0 4px 12px var(--primary-glow)'
               }}
             >
-              <Route size={14}/> Go
+              <Route size={16}/> Go
             </button>
           </div>
+
+          {/* Autocomplete Suggestions */}
+          {showSuggestions && suggestions.length > 0 && (
+            <div className="glass-panel" style={{
+              position: 'absolute', top: '110%', left: 0, right: 0,
+              zIndex: 1100, borderRadius: '16px', padding: '8px',
+              maxHeight: '300px', overflowY: 'auto'
+            }}>
+              {suggestions.map((s, i) => (
+                <div 
+                  key={i}
+                  onClick={() => {
+                    setSearchInput(s.name);
+                    setNavDest(s);
+                    setRouteResult(s.name);
+                    setShowSuggestions(false);
+                    startNavigation();
+                  }}
+                  style={{
+                    padding: '12px 16px', borderRadius: '10px', cursor: 'pointer',
+                    fontSize: '0.9em', color: '#ccc', transition: 'background 0.2s',
+                    borderBottom: i < suggestions.length - 1 ? '1px solid rgba(255,255,255,0.03)' : 'none',
+                    display: 'flex', alignItems: 'center', gap: '10px'
+                  }}
+                  className="suggestion-item"
+                >
+                  <MapPin size={14} color="#555" />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Result / Error feedback floating below the bar but still in header space */}
           <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 1010 }}>
             {routeResult && !navActive && (
-              <div style={{
-                marginTop: '8px', background: 'rgba(16,185,129,0.95)',
-                border: '1px solid rgba(16,185,129,0.4)', borderRadius: '12px',
-                padding: '8px 14px', fontSize: '0.8em', color: 'white',
-                display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'space-between',
-                boxShadow: '0 4px 15px rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)'
+              <div className="glass-panel" style={{
+                marginTop: '12px', background: 'rgba(16,185,129,0.15)',
+                borderColor: 'rgba(16,185,129,0.3)', borderRadius: '14px',
+                padding: '10px 16px', fontSize: '0.85em', color: 'white',
+                display: 'flex', gap: '10px', alignItems: 'center', justifyContent: 'space-between',
+                animation: 'slideUp 0.3s ease-out'
               }}>
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                  <Route size={14}/>
-                  <span>Found: <strong>{routeResult.substring(0, 30)}…</strong></span>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', minWidth: 0 }}>
+                  <div style={{ background: 'var(--accent)', padding: '6px', borderRadius: '50%' }}>
+                    <CheckCircle2 size={16} color="white" />
+                  </div>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Found: <strong>{routeResult}</strong></span>
                 </div>
                 <button
                   onClick={startNavigation}
                   style={{
-                    background: 'white', borderRadius: '999px',
-                    padding: '4px 12px', fontSize: '0.8em', fontWeight: 700,
-                    color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0,
+                    background: 'white', borderRadius: '10px',
+                    padding: '6px 14px', fontSize: '0.85em', fontWeight: 800,
+                    color: '#000', display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0,
                   }}
                 >
-                  <Navigation size={12}/> Start
+                  <Navigation size={14}/> Start
                 </button>
               </div>
             )}
             {routeError && (
-              <div style={{
-                marginTop: '8px', background: 'rgba(239,68,68,0.95)',
-                border: '1px solid rgba(239,68,68,0.4)', borderRadius: '12px',
-                padding: '8px 14px', fontSize: '0.8em', color: 'white',
-                boxShadow: '0 4px 15px rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)'
+              <div className="glass-panel" style={{
+                marginTop: '12px', background: 'rgba(239,68,68,0.15)',
+                borderColor: 'rgba(239,68,68,0.3)', borderRadius: '14px',
+                padding: '12px 16px', fontSize: '0.85em', color: 'white',
+                animation: 'slideUp 0.3s ease-out', display: 'flex', alignItems: 'center', gap: '10px'
               }}>
-                ⚠ {routeError}
+                <AlertTriangle size={18} color="var(--danger)" />
+                <span>{routeError}</span>
               </div>
             )}
           </div>
@@ -625,6 +948,49 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
           <ProximityToast alert={proximityAlert} onDismiss={() => setProximityAlert(null)} />
         )}
 
+
+      {/* ── Nearest Camera Widget ── */}
+      {gpsEnabled && nearestCam && !navActive && (
+        <div style={{ 
+          position: 'absolute', top: '100px', right: '24px', zIndex: 1000,
+          animation: 'slideInRight 0.5s cubic-bezier(0.16, 1, 0.3, 1)'
+        }}>
+          <div className="glass-panel" style={{ 
+            padding: '16px', borderRadius: '20px', minWidth: '220px',
+            border: `1px solid ${nearestCam.type === 'Speed' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(255,255,255,0.1)'}`,
+            background: nearestCam.type === 'Speed' ? 'rgba(239, 68, 68, 0.05)' : 'var(--glass)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+              <div style={{ 
+                background: nearestCam.type === 'Speed' ? 'var(--danger)' : 'var(--primary)',
+                padding: '8px', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
+              }}>
+                <Camera size={20} color="white" />
+              </div>
+              <div>
+                <div style={{ fontSize: '0.7em', fontWeight: 800, color: '#666', textTransform: 'uppercase', letterSpacing: '1px' }}>Nearest Radar</div>
+                <div style={{ fontSize: '0.95em', fontWeight: 800, color: 'white' }}>{nearestCam.type} Camera</div>
+              </div>
+            </div>
+            
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontSize: '1.4em', fontWeight: 900, color: 'white', lineHeight: 1 }}>{nearestCam.dist.toFixed(1)}</span>
+                <span style={{ fontSize: '0.65em', color: '#555', fontWeight: 800, textTransform: 'uppercase' }}>km away</span>
+              </div>
+              {nearestCam.speedLimit && (
+                <div style={{ textAlign: 'right' }}>
+                   <div style={{ 
+                     width: '36px', height: '36px', border: '3px solid red', borderRadius: '50%',
+                     display: 'flex', alignItems: 'center', justifyContent: 'center',
+                     fontWeight: 900, color: 'white', fontSize: '0.9em', background: 'black'
+                   }}>{nearestCam.speedLimit}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* FAB Group */}
       <div className={`fab-group ${navActive ? 'nav-active' : ''}`}>
@@ -722,49 +1088,57 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
 
       {/* ── Turn-by-Turn HUD ──────────────────────────────────────────────── */}
       {navActive && turnInfo && !arrived && (
-        <div className="glass-panel turn-hud">
+        <div className="glass-panel turn-hud" style={{ border: '1px solid rgba(255,255,255,0.1)', animation: 'slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1)' }}>
           {/* Next turn */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
-            <div style={{ background: 'rgba(59,130,246,0.2)', padding: '10px', borderRadius: '50%', flexShrink: 0 }}>
-              <CornerUpRight size={24} color="var(--primary)" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}>
+            <div style={{ 
+              background: 'linear-gradient(135deg, var(--primary), var(--primary-hover))', 
+              padding: '12px', borderRadius: '14px', flexShrink: 0,
+              boxShadow: '0 8px 20px var(--primary-glow)'
+            }}>
+              <CornerUpRight size={28} color="white" />
             </div>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: '0.95em', fontWeight: 700, color: 'white', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{ fontSize: '1.1em', fontWeight: 800, color: 'white', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', letterSpacing: '-0.3px' }}>
                 {turnInfo.nextText}
               </div>
               {turnInfo.nextDistM > 0 && (
-                <div style={{ fontSize: '0.75em', color: '#aaa', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span>in {turnInfo.nextDistM > 1000 ? `${(turnInfo.nextDistM/1000).toFixed(1)} km` : `${Math.round(turnInfo.nextDistM)} m`}</span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#555' }}>
-                    <span className="pulse-dot" style={{ width: 6, height: 6 }} /> Live
+                <div style={{ fontSize: '0.85em', color: '#999', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}>
+                  <span style={{ color: 'var(--primary)' }}>in {turnInfo.nextDistM > 1000 ? `${(turnInfo.nextDistM/1000).toFixed(1)} km` : `${Math.round(turnInfo.nextDistM)} m`}</span>
+                  <div style={{ width: '4px', height: '4px', borderRadius: '50%', background: '#444' }} />
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#666', fontSize: '0.8em', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    <span className="pulse-dot" style={{ width: 6, height: 6 }} /> Active
                   </span>
                 </div>
               )}
             </div>
           </div>
           
-          <div style={{ width: '1px', height: '40px', background: 'var(--glass-border)', flexShrink: 0 }} />
+          <div style={{ width: '1px', height: '48px', background: 'var(--glass-border)', flexShrink: 0 }} />
           
           {/* Journey summary & Steps Toggle */}
-          <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: '24px', alignItems: 'center', flexShrink: 0 }}>
             <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: '1.2em', fontWeight: 800, color: 'white' }}>{turnInfo.totalMins}</div>
-              <div style={{ fontSize: '0.65em', color: '#888', textTransform: 'uppercase', letterSpacing: '1px' }}>min</div>
+              <div style={{ fontSize: '1.5em', fontWeight: 900, color: 'white', lineHeight: 1 }}>{turnInfo.totalMins}</div>
+              <div style={{ fontSize: '0.7em', color: '#666', textTransform: 'uppercase', letterSpacing: '1.2px', marginTop: '4px', fontWeight: 800 }}>min</div>
             </div>
             <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: '1.2em', fontWeight: 800, color: 'white' }}>{turnInfo.totalKm}</div>
-              <div style={{ fontSize: '0.65em', color: '#888', textTransform: 'uppercase', letterSpacing: '1px' }}>km</div>
+              <div style={{ fontSize: '1.5em', fontWeight: 900, color: 'white', lineHeight: 1 }}>{turnInfo.totalKm}</div>
+              <div style={{ fontSize: '0.7em', color: '#666', textTransform: 'uppercase', letterSpacing: '1.2px', marginTop: '4px', fontWeight: 800 }}>km</div>
             </div>
             <button 
               onClick={() => setShowFullRouteSteps(!showFullRouteSteps)}
               style={{
-                background: 'rgba(255,255,255,0.05)', border: '1px solid #333',
-                borderRadius: '8px', padding: '6px 10px', color: '#ccc', fontSize: '0.7em',
-                fontWeight: 600, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px'
+                background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: '12px', padding: '8px 12px', color: 'white',
+                transition: 'all 0.2s', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)'
               }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
             >
-              <Info size={14} />
-              <span>STEPS</span>
+              <Info size={18} color="var(--primary)" />
+              <span style={{ fontSize: '0.65em', fontWeight: 800, letterSpacing: '0.5px' }}>STEPS</span>
             </button>
           </div>
         </div>
@@ -813,8 +1187,18 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
           enabled={gpsEnabled}
           setUserPos={setUserPos}
           trafficCameras={trafficCameras}
+          safetyCameras={safetyCameras}
           onProximityAlert={handleProximityAlert}
         />
+
+        {/* Nearest Camera Tracker */}
+        {gpsEnabled && userPos && (
+          <NearestCameraTracker 
+            userPos={userPos} 
+            safetyCameras={safetyCameras} 
+            onNearestUpdate={setNearestCam} 
+          />
+        )}
 
         {/* Waypoint controller */}
         <WaypointController
@@ -875,6 +1259,40 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
             </Marker>
           ))}
         </MarkerClusterGroup>
+
+        {/* Incident Markers */}
+        {filters.showIncidents && incidents.map(incident => {
+          if (!incident.latitude || !incident.longitude) return null;
+          return (
+            <Marker
+              key={incident.id}
+              position={[incident.latitude, incident.longitude]}
+              icon={getIncidentIcon(incident.type, incident.severity)}
+              zIndexOffset={500}
+            >
+              <Popup className="custom-popup">
+                <IncidentPopup incident={incident} />
+              </Popup>
+            </Marker>
+          );
+        })}
+
+        {/* Police Station Markers */}
+        {filters.showPolice && policeStations.map(station => {
+          if (!station.latitude || !station.longitude) return null;
+          return (
+            <Marker
+              key={station.id}
+              position={[station.latitude, station.longitude]}
+              icon={getPoliceIcon(station.type)}
+              zIndexOffset={400}
+            >
+              <Popup className="custom-popup">
+                <PolicePopup station={station} />
+              </Popup>
+            </Marker>
+          );
+        })}
       </MapContainer>
       </div>
     </div>
