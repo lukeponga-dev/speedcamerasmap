@@ -8,6 +8,7 @@ import 'leaflet/dist/leaflet.css';
 import '../app/gps.css';
 import { Camera, AlertTriangle, Info, MapPin, Maximize2, Flag, Navigation, Crosshair, Trash2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import { Search, X as XIcon, Route } from 'lucide-react';
 
 // ── Leaflet default icon fix ──────────────────────────────────────────────────
 delete L.Icon.Default.prototype._getIconUrl;
@@ -324,14 +325,77 @@ function ProximityToast({ alert, onDismiss }) {
   );
 }
 
+// ── Search-to-Route Controller ────────────────────────────────────────────────
+function SearchRouteController({ query, userPos, onResult, onError }) {
+  const map = useMap();
+  const routeLayerRef = useRef(null);
+  const destMarkerRef = useRef(null);
+
+  useEffect(() => {
+    if (!query) return;
+
+    // Clean up previous route & marker
+    if (routeLayerRef.current) map.removeLayer(routeLayerRef.current);
+    if (destMarkerRef.current)  map.removeLayer(destMarkerRef.current);
+
+    fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=nz&limit=1`,
+      { headers: { 'Accept-Language': 'en', 'User-Agent': 'NZTAWatch/2.5' } }
+    )
+      .then(r => r.json())
+      .then(data => {
+        if (!data.length) { onError('No results found for that destination.'); return; }
+        const dest = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+        const origin = userPos || map.getCenter();
+
+        // Dashed animated polyline
+        routeLayerRef.current = L.polyline(
+          [[origin.lat, origin.lng], [dest.lat, dest.lng]],
+          { color: '#3b82f6', weight: 5, opacity: 0.75, dashArray: '12, 8', lineJoin: 'round' }
+        ).addTo(map);
+
+        // Destination pin
+        const destIcon = L.divIcon({
+          className: '',
+          html: `<div style="
+            background:linear-gradient(135deg,#3b82f6,#6366f1);
+            width:36px;height:36px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);
+            border:3px solid white;box-shadow:0 4px 16px rgba(99,102,241,0.7);
+            display:flex;align-items:center;justify-content:center;
+          "><span style="transform:rotate(45deg);font-size:16px;">🎯</span></div>`,
+          iconSize:   [36, 36],
+          iconAnchor: [18, 36],
+          popupAnchor:[0, -38],
+        });
+
+        destMarkerRef.current = L.marker([dest.lat, dest.lng], { icon: destIcon })
+          .addTo(map)
+          .bindPopup(`<b style="color:#3b82f6;">🎯 Destination</b><br><span style="font-size:0.85em;color:#ccc;">${data[0].display_name}</span>`)
+          .openPopup();
+
+        // Cinematic fly-to
+        map.flyToBounds(routeLayerRef.current.getBounds(), { padding: [60, 60], duration: 1.5 });
+        onResult(data[0].display_name);
+      })
+      .catch(() => onError('Geocoding failed – check your connection.'));
+  }, [query]);
+
+  return null;
+}
+
 // ── Main Map ──────────────────────────────────────────────────────────────────
 export default function Map({ trafficCameras, safetyCameras, filters }) {
-  const [mounted, setMounted]       = useState(false);
-  const [gpsEnabled, setGpsEnabled] = useState(false);
+  const [mounted, setMounted]           = useState(false);
+  const [gpsEnabled, setGpsEnabled]     = useState(false);
   const [waypointMode, setWaypointMode] = useState(false);
-  const [waypoints, setWaypoints]   = useState([]);
-  const [userPos, setUserPos]       = useState(null);
+  const [waypoints, setWaypoints]       = useState([]);
+  const [userPos, setUserPos]           = useState(null);
   const [proximityAlert, setProximityAlert] = useState(null);
+  const [searchInput, setSearchInput]   = useState('');
+  const [pendingQuery, setPendingQuery] = useState(null);
+  const [routeResult, setRouteResult]   = useState(null);
+  const [routeError, setRouteError]     = useState(null);
+  const searchRef = useRef(null);
   const mapRef = useRef(null);
 
   useEffect(() => { setMounted(true); }, []);
@@ -360,12 +424,92 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
     </div>
   );
 
+  const submitSearch = () => {
+    const q = searchInput.trim();
+    if (!q) return;
+    setRouteError(null);
+    setRouteResult(null);
+    setPendingQuery(q);
+  };
+
+  const clearSearch = () => {
+    setSearchInput('');
+    setPendingQuery(null);
+    setRouteResult(null);
+    setRouteError(null);
+  };
+
   return (
     <div style={{ position: 'relative', height: '100%', width: '100%' }}>
-      {/* Proximity Alert Toast */}
+      {/* Proximity Alert Toast – pushed down to not overlap search bar */}
       {proximityAlert && (
         <ProximityToast alert={proximityAlert} onDismiss={() => setProximityAlert(null)} />
       )}
+
+      {/* ── Search Bar ───────────────────────────────────────────────────── */}
+      <div style={{
+        position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)',
+        zIndex: 1000, width: '90%', maxWidth: '440px',
+      }}>
+        <div className="glass-panel" style={{
+          borderRadius: '999px',
+          display: 'flex', alignItems: 'center', gap: '8px',
+          padding: '8px 16px',
+          border: '1px solid var(--glass-border)',
+        }}>
+          <Search size={18} color="#555" style={{ flexShrink: 0 }} />
+          <input
+            ref={searchRef}
+            type="text"
+            value={searchInput}
+            placeholder="Search destination in NZ…"
+            onChange={e => setSearchInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && submitSearch()}
+            style={{
+              flex: 1, background: 'transparent', border: 'none', outline: 'none',
+              color: 'white', fontSize: '0.95em', fontFamily: 'inherit',
+            }}
+          />
+          {searchInput && (
+            <button onClick={clearSearch} style={{ color: '#555', display: 'flex' }}>
+              <XIcon size={16}/>
+            </button>
+          )}
+          <button
+            onClick={submitSearch}
+            style={{
+              background: 'var(--primary)', borderRadius: '999px',
+              padding: '6px 14px', fontSize: '0.8em', fontWeight: 600,
+              color: 'white', display: 'flex', alignItems: 'center', gap: '4px',
+              flexShrink: 0,
+            }}
+          >
+            <Route size={14}/> Go
+          </button>
+        </div>
+
+        {/* Result / Error feedback */}
+        {routeResult && (
+          <div style={{
+            marginTop: '8px', background: 'rgba(16,185,129,0.15)',
+            border: '1px solid rgba(16,185,129,0.4)', borderRadius: '12px',
+            padding: '8px 14px', fontSize: '0.8em', color: '#10b981',
+            display: 'flex', gap: '6px', alignItems: 'center',
+          }}>
+            <Route size={14}/>
+            <span>Route to <strong style={{ color: 'white' }}>{routeResult.substring(0, 50)}…</strong></span>
+          </div>
+        )}
+        {routeError && (
+          <div style={{
+            marginTop: '8px', background: 'rgba(239,68,68,0.15)',
+            border: '1px solid rgba(239,68,68,0.4)', borderRadius: '12px',
+            padding: '8px 14px', fontSize: '0.8em', color: '#ef4444',
+          }}>
+            ⚠ {routeError}
+          </div>
+        )}
+      </div>
 
       {/* FAB Group */}
       <div className="fab-group">
@@ -450,6 +594,16 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
           waypoints={waypoints}
           setWaypoints={setWaypoints}
         />
+
+        {/* Search-to-Route controller */}
+        {pendingQuery && (
+          <SearchRouteController
+            query={pendingQuery}
+            userPos={userPos}
+            onResult={(name) => setRouteResult(name)}
+            onError={(msg) => setRouteError(msg)}
+          />
+        )}
 
         {/* Clustered Camera Markers */}
         <MarkerClusterGroup
