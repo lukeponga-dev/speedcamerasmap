@@ -356,8 +356,7 @@ function SearchRouteController({ query, userPos, onDestFound, onError }) {
         });
         prevMarkerRef.current = L.marker([dest.lat, dest.lng], { icon: destIcon })
           .addTo(map)
-          .bindPopup(`<b style="color:#3b82f6;">🎯 Destination</b><br><span style="font-size:0.85em;color:#ccc;">${dest.name}</span>`)
-          .openPopup();
+          .bindPopup(`<b style="color:#3b82f6;">🎯 Destination</b><br><span style="font-size:0.85em;color:#ccc;">${dest.name}</span>`);
 
         onDestFound(dest); // hand off to LiveNavController
       })
@@ -418,6 +417,7 @@ function LiveNavController({ dest, userPos, onTurnInfo, onArrival, active }) {
           totalKm, totalMins,
           nextText: nextStep?.text || 'Follow the route',
           nextDistM: nextStep?.distance || 0,
+          allSteps: route.instructions || [], // Store all steps for the detail view
         });
       });
 
@@ -472,8 +472,9 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
   // Navigation state
   const [navDest, setNavDest]           = useState(null);   // {lat,lng,name}
   const [navActive, setNavActive]       = useState(false);
-  const [turnInfo, setTurnInfo]         = useState(null);   // {totalKm, totalMins, nextText, nextDistM}
+  const [turnInfo, setTurnInfo]         = useState(null);   // {totalKm, totalMins, nextText, nextDistM, allSteps}
   const [arrived, setArrived]           = useState(false);
+  const [showFullRouteSteps, setShowFullRouteSteps] = useState(false);
   const searchRef = useRef(null);
   const mapRef = useRef(null);
 
@@ -516,10 +517,10 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
     setPendingQuery(null);
     setRouteResult(null);
     setRouteError(null);
-    setNavDest(null);
     setNavActive(false);
     setTurnInfo(null);
     setArrived(false);
+    setShowFullRouteSteps(false);
   };
 
   const startNavigation = () => {
@@ -533,86 +534,96 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
   const stopNavigation = () => {
     setNavActive(false);
     setTurnInfo(null);
+    setShowFullRouteSteps(false);
   };
 
   return (
-    <div style={{ position: 'relative', height: '100%', width: '100%' }}>
-      {/* Proximity Alert Toast – pushed down to not overlap search bar */}
-      {proximityAlert && (
-        <ProximityToast alert={proximityAlert} onDismiss={() => setProximityAlert(null)} />
-      )}
-
-      {/* ── Search Bar ───────────────────────────────────────────────────── */}
-      <div className="search-bar-container">
-        <div className="glass-panel" style={{
-          borderRadius: '999px',
-          display: 'flex', alignItems: 'center', gap: '8px',
-          padding: '8px 16px',
-          border: '1px solid var(--glass-border)',
-        }}>
-          <Search size={18} color="#555" style={{ flexShrink: 0 }} />
-          <input
-            ref={searchRef}
-            type="text"
-            value={searchInput}
-            placeholder="Search destination in NZ…"
-            onChange={e => setSearchInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && submitSearch()}
-            style={{
-              flex: 1, background: 'transparent', border: 'none', outline: 'none',
-              color: 'white', fontSize: '0.95em', fontFamily: 'inherit',
-            }}
-          />
-          {searchInput && (
-            <button onClick={clearSearch} style={{ color: '#555', display: 'flex' }}>
-              <XIcon size={16}/>
-            </button>
-          )}
-          <button
-            onClick={submitSearch}
-            style={{
-              background: 'var(--primary)', borderRadius: '999px',
-              padding: '6px 14px', fontSize: '0.8em', fontWeight: 600,
-              color: 'white', display: 'flex', alignItems: 'center', gap: '4px',
-              flexShrink: 0,
-            }}
-          >
-            <Route size={14}/> Go
-          </button>
-        </div>
-
-        {/* Result / Error feedback */}
-        {routeResult && !navActive && (
-          <div style={{
-            marginTop: '8px', background: 'rgba(16,185,129,0.15)',
-            border: '1px solid rgba(16,185,129,0.4)', borderRadius: '12px',
-            padding: '8px 14px', fontSize: '0.8em', color: '#10b981',
-            display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'space-between',
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', background: '#121212' }}>
+      {/* ── Search Header ────────────────────────────────────────────────── */}
+      <div className="search-header">
+        <div style={{ width: '90%', maxWidth: '440px', position: 'relative' }}>
+          <div className="glass-panel" style={{
+            borderRadius: '999px',
+            display: 'flex', alignItems: 'center', gap: '8px',
+            padding: '8px 16px',
+            border: '1px solid var(--glass-border)',
           }}>
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-              <Route size={14}/>
-              <span>Found: <strong style={{ color: 'white' }}>{routeResult.substring(0, 40)}…</strong></span>
-            </div>
+            <Search size={18} color="#555" style={{ flexShrink: 0 }} />
+            <input
+              ref={searchRef}
+              type="text"
+              value={searchInput}
+              placeholder="Search destination in NZ…"
+              onChange={e => setSearchInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && submitSearch()}
+              style={{
+                flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                color: 'white', fontSize: '0.95em', fontFamily: 'inherit',
+              }}
+            />
+            {searchInput && (
+              <button onClick={clearSearch} style={{ color: '#555', display: 'flex' }}>
+                <XIcon size={16}/>
+              </button>
+            )}
             <button
-              onClick={startNavigation}
+              onClick={submitSearch}
               style={{
                 background: 'var(--primary)', borderRadius: '999px',
-                padding: '4px 12px', fontSize: '0.8em', fontWeight: 700,
-                color: 'white', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0,
+                padding: '6px 14px', fontSize: '0.8em', fontWeight: 600,
+                color: 'white', display: 'flex', alignItems: 'center', gap: '4px',
+                flexShrink: 0,
               }}
             >
-              <Navigation size={12}/> Start
+              <Route size={14}/> Go
             </button>
           </div>
-        )}
-        {routeError && (
-          <div style={{
-            marginTop: '8px', background: 'rgba(239,68,68,0.15)',
-            border: '1px solid rgba(239,68,68,0.4)', borderRadius: '12px',
-            padding: '8px 14px', fontSize: '0.8em', color: '#ef4444',
-          }}>
-            ⚠ {routeError}
+
+          {/* Result / Error feedback floating below the bar but still in header space */}
+          <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 1010 }}>
+            {routeResult && !navActive && (
+              <div style={{
+                marginTop: '8px', background: 'rgba(16,185,129,0.95)',
+                border: '1px solid rgba(16,185,129,0.4)', borderRadius: '12px',
+                padding: '8px 14px', fontSize: '0.8em', color: 'white',
+                display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'space-between',
+                boxShadow: '0 4px 15px rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)'
+              }}>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <Route size={14}/>
+                  <span>Found: <strong>{routeResult.substring(0, 30)}…</strong></span>
+                </div>
+                <button
+                  onClick={startNavigation}
+                  style={{
+                    background: 'white', borderRadius: '999px',
+                    padding: '4px 12px', fontSize: '0.8em', fontWeight: 700,
+                    color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0,
+                  }}
+                >
+                  <Navigation size={12}/> Start
+                </button>
+              </div>
+            )}
+            {routeError && (
+              <div style={{
+                marginTop: '8px', background: 'rgba(239,68,68,0.95)',
+                border: '1px solid rgba(239,68,68,0.4)', borderRadius: '12px',
+                padding: '8px 14px', fontSize: '0.8em', color: 'white',
+                boxShadow: '0 4px 15px rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)'
+              }}>
+                ⚠ {routeError}
+              </div>
+            )}
           </div>
+        </div>
+      </div>
+
+      <div style={{ flex: 1, position: 'relative' }}>
+        {/* Proximity Alert Toast */}
+        {proximityAlert && (
+          <ProximityToast alert={proximityAlert} onDismiss={() => setProximityAlert(null)} />
         )}
       </div>
 
@@ -685,6 +696,31 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
         </div>
       )}
 
+      {/* ── Full Route Steps List ────────────────────────────────────────── */}
+      {navActive && showFullRouteSteps && turnInfo && (
+        <div className="route-details-container">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #333', paddingBottom: '10px' }}>
+            <h3 style={{ margin: 0, fontSize: '1em', color: 'white' }}>Route Instructions</h3>
+            <button onClick={() => setShowFullRouteSteps(false)} style={{ color: '#888' }}>✕</button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {turnInfo.allSteps.map((step, idx) => (
+              <div key={idx} style={{ display: 'flex', gap: '12px', fontSize: '0.85em', color: '#ccc' }}>
+                <span style={{ color: 'var(--primary)', fontWeight: 700 }}>{idx + 1}.</span>
+                <div>
+                  <div style={{ color: 'white', marginBottom: '2px' }}>{step.text}</div>
+                  {step.distance > 0 && (
+                    <div style={{ fontSize: '0.8em', color: '#666' }}>
+                      {step.distance > 1000 ? `${(step.distance/1000).toFixed(1)} km` : `${Math.round(step.distance)} m`}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── Turn-by-Turn HUD ──────────────────────────────────────────────── */}
       {navActive && turnInfo && !arrived && (
         <div className="glass-panel turn-hud">
@@ -710,7 +746,7 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
           
           <div style={{ width: '1px', height: '40px', background: 'var(--glass-border)', flexShrink: 0 }} />
           
-          {/* Journey summary */}
+          {/* Journey summary & Steps Toggle */}
           <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexShrink: 0 }}>
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontSize: '1.2em', fontWeight: 800, color: 'white' }}>{turnInfo.totalMins}</div>
@@ -720,6 +756,17 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
               <div style={{ fontSize: '1.2em', fontWeight: 800, color: 'white' }}>{turnInfo.totalKm}</div>
               <div style={{ fontSize: '0.65em', color: '#888', textTransform: 'uppercase', letterSpacing: '1px' }}>km</div>
             </div>
+            <button 
+              onClick={() => setShowFullRouteSteps(!showFullRouteSteps)}
+              style={{
+                background: 'rgba(255,255,255,0.05)', border: '1px solid #333',
+                borderRadius: '8px', padding: '6px 10px', color: '#ccc', fontSize: '0.7em',
+                fontWeight: 600, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px'
+              }}
+            >
+              <Info size={14} />
+              <span>STEPS</span>
+            </button>
           </div>
         </div>
       )}
@@ -830,6 +877,7 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
           ))}
         </MarkerClusterGroup>
       </MapContainer>
+      </div>
     </div>
   );
 }
