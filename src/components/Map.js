@@ -5,6 +5,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Camera, AlertTriangle, Info } from 'lucide-react';
+import RoutingControl from './RoutingControl';
 
 // Fix Leaflet's default icon paths in Next.js
 delete L.Icon.Default.prototype._getIconUrl;
@@ -103,6 +104,8 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
           </Popup>
         </Marker>
       ))}
+
+      <RoutingControl />
     </MapContainer>
   );
 }

@@ -97,3 +97,38 @@ button {
     display: none !important;
   }
 }
+
+/* Routing Machine Dark Mode Overrides */
+.leaflet-routing-container {
+  background-color: var(--surface) !important;
+  color: var(--foreground) !important;
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 15px rgba(0,0,0,0.5) !important;
+  border-radius: var(--radius);
+}
+.leaflet-routing-alt {
+  background-color: var(--surface) !important;
+}
+.leaflet-routing-alt table {
+  color: var(--foreground) !important;
+}
+.leaflet-routing-alt tr:hover {
+  background-color: var(--surface-hover) !important;
+}
+.leaflet-routing-alt h2 {
+  color: var(--primary);
+}
+.leaflet-routing-geocoder input {
+  background-color: var(--background);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+.leaflet-routing-remove-waypoint {
+  background-color: var(--danger);
+}
+.leaflet-routing-icon {
+  filter: invert(1);
+}
+
