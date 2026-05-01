@@ -1,39 +1,50 @@
 import { NextResponse } from 'next/server';
 
 export async function GET() {
-  const endpoint = "https://trafficnz.info/service/traffic/rest/4";
+  const endpoint = "https://trafficnz.info/service/traffic/rest/4/cameras/all";
 
   try {
     const response = await fetch(endpoint, {
       headers: {
         'Accept': 'application/json',
       },
-      // You can add caching strategies here if needed
       next: { revalidate: 60 } // Cache for 60 seconds
     });
 
     if (!response.ok) {
       console.error(`Upstream API returned status: ${response.status}`);
-      // Fallback to mock data if the upstream fails, so the UI doesn't break
       return NextResponse.json({
         success: false,
         error: `Upstream returned ${response.status}`,
         data: getMockCameras(),
         timestamp: new Date().toISOString()
-      }, { status: response.status === 404 ? 200 : response.status }); // Send 200 with mock data on 404
+      }, { status: response.status === 404 ? 200 : response.status });
     }
 
-    const data = await response.json();
+    const rawData = await response.json();
+    let mappedData = [];
 
-    // Attempt to map the data. If the structure is unknown, we might just pass it raw
-    // or map it if we can infer the structure.
-    // For now, we will assume it returns an array of cameras or an object containing them.
+    if (rawData?.response?.camera) {
+      // Ensure it's an array (in case there's only 1 camera, it might be an object)
+      const cameras = Array.isArray(rawData.response.camera) ? rawData.response.camera : [rawData.response.camera];
+      
+      mappedData = cameras.map(cam => ({
+        id: cam.id,
+        name: cam.name || `Camera ${cam.id}`,
+        description: cam.description || '',
+        latitude: cam.latitude,
+        longitude: cam.longitude,
+        imageUrl: cam.imageUrl ? `https://trafficnz.info${cam.imageUrl}` : 'https://via.placeholder.com/600x400/333333/ffffff?text=No+Image',
+        direction: cam.direction || 'Unknown',
+        updatedAt: new Date().toISOString() // Assuming the feed is live
+      }));
+    } else {
+      mappedData = getMockCameras();
+    }
 
-    // We pass it down to the client. The client Map component may need to be updated
-    // to handle the actual schema returned by this endpoint.
     return NextResponse.json({
       success: true,
-      data: data,
+      data: mappedData,
       timestamp: new Date().toISOString()
     });
 

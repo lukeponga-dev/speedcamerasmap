@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import Sidebar from '@/components/Sidebar';
+import { Menu, X } from 'lucide-react';
 
 // Dynamically import the Map component with ssr disabled
 const Map = dynamic(() => import('@/components/Map'), { 
@@ -39,32 +40,26 @@ export default function Home() {
   }, []);
 
   return (
-    <main style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden', position: 'relative' }}>
+    <main style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden', position: 'relative', background: '#000' }}>
       {/* Mobile Sidebar Toggle Button */}
       <button 
         onClick={() => setSidebarOpen(!sidebarOpen)}
+        className="mobile-toggle-btn glass-panel"
         style={{
           position: 'absolute',
-          top: '16px',
-          left: '16px',
-          zIndex: 20,
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          borderRadius: '8px',
-          padding: '8px',
+          top: '20px',
+          left: '20px',
+          zIndex: 25,
+          borderRadius: '12px',
+          padding: '12px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          color: 'var(--foreground)',
-          boxShadow: '0 2px 10px rgba(0,0,0,0.5)'
+          color: 'white',
+          transition: 'all 0.2s ease'
         }}
-        className="mobile-toggle-btn"
       >
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="3" y1="12" x2="21" y2="12"></line>
-          <line x1="3" y1="6" x2="21" y2="6"></line>
-          <line x1="3" y1="18" x2="21" y2="18"></line>
-        </svg>
+        {sidebarOpen ? <X size={24} /> : <Menu size={24} />}
       </button>
 
       {/* Sidebar Container */}
@@ -75,11 +70,11 @@ export default function Home() {
           left: 0,
           top: 0,
           bottom: 0,
-          zIndex: 15,
-          transition: 'transform 0.3s ease',
+          zIndex: 20,
+          transition: 'transform 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
           transform: sidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
           width: '320px',
-          maxWidth: '80vw'
+          maxWidth: '85vw'
         }}
       >
         <Sidebar 
@@ -89,24 +84,27 @@ export default function Home() {
             trafficCount: trafficCameras.length,
             safetyCount: safetyCameras.length
           }}
+          trafficCameras={trafficCameras}
           closeSidebar={() => setSidebarOpen(false)}
         />
       </div>
       
       {/* Overlay for mobile when sidebar is open */}
-      {sidebarOpen && (
-        <div 
-          onClick={() => setSidebarOpen(false)}
-          className="sidebar-overlay"
-          style={{
-            position: 'absolute',
-            inset: 0,
-            background: 'rgba(0,0,0,0.5)',
-            zIndex: 14,
-            display: 'block'
-          }}
-        />
-      )}
+      <div 
+        onClick={() => setSidebarOpen(false)}
+        className="sidebar-overlay"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          background: 'rgba(0,0,0,0.6)',
+          backdropFilter: 'blur(4px)',
+          WebkitBackdropFilter: 'blur(4px)',
+          zIndex: 15,
+          display: sidebarOpen ? 'block' : 'none',
+          opacity: sidebarOpen ? 1 : 0,
+          transition: 'opacity 0.4s ease'
+        }}
+      />
 
       {/* Map Container */}
       <div style={{ flex: 1, position: 'relative' }}>
