@@ -24,11 +24,11 @@ export async function GET() {
     }
 
     const data = await response.json();
-    
+
     // Attempt to map the data. If the structure is unknown, we might just pass it raw
     // or map it if we can infer the structure.
     // For now, we will assume it returns an array of cameras or an object containing them.
-    
+
     // We pass it down to the client. The client Map component may need to be updated
     // to handle the actual schema returned by this endpoint.
     return NextResponse.json({
