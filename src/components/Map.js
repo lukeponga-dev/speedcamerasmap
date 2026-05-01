@@ -538,7 +538,6 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
   };
 
   return (
-  return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', background: '#121212' }}>
       {/* ── Search Header ────────────────────────────────────────────────── */}
       <div className="search-header">
@@ -625,7 +624,7 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
         {proximityAlert && (
           <ProximityToast alert={proximityAlert} onDismiss={() => setProximityAlert(null)} />
         )}
-      </div>
+
 
       {/* FAB Group */}
       <div className={`fab-group ${navActive ? 'nav-active' : ''}`}>
