@@ -70,3 +70,57 @@
   animation: slideInRight 0.4s ease;
   box-shadow: 0 8px 32px rgba(0,0,0,0.7);
 }
+/* ── Search Bar Container ── */
+.search-bar-container {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  width: 90%;
+  max-width: 440px;
+}
+
+/* ── Turn-by-Turn HUD ── */
+.turn-hud {
+  position: absolute;
+  bottom: 36px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  border-radius: 999px;
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  border: 1px solid rgba(59,130,246,0.4);
+  width: 90%;
+  max-width: 600px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+
+/* ── Mobile Responsive Overrides ── */
+@media (max-width: 767px) {
+  /* Push search bar down so it doesn't overlap the sidebar toggle */
+  .search-bar-container {
+    top: 70px;
+  }
+  
+  /* Stack the Turn-by-Turn HUD contents */
+  .turn-hud {
+    flex-direction: column;
+    border-radius: 20px;
+    gap: 12px;
+    padding: 16px;
+  }
+  
+  .turn-hud > div:nth-child(2) {
+    /* Hide the vertical divider when stacked */
+    display: none;
+  }
+  
+  /* Push FAB group up when Turn-by-Turn HUD is active to prevent overlap */
+  .fab-group.nav-active {
+    bottom: 160px;
+  }
+}

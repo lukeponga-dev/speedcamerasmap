@@ -106,7 +106,7 @@ button {
   align-items: center;
   justify-content: center;
   font-weight: bold;
-  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.8), 0 0 0 4px rgba(59, 130, 246, 0.3);
   border: 2px solid white;
 }
 

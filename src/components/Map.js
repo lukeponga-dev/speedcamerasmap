@@ -8,7 +8,7 @@ import 'leaflet/dist/leaflet.css';
 import '../app/gps.css';
 import { Camera, AlertTriangle, Info, MapPin, Maximize2, Flag, Navigation, Crosshair, Trash2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { Search, X as XIcon, Route } from 'lucide-react';
+import { Search, X as XIcon, Route, CornerUpRight, CheckCircle2 } from 'lucide-react';
 
 // ── Leaflet default icon fix ──────────────────────────────────────────────────
 delete L.Icon.Default.prototype._getIconUrl;
@@ -325,18 +325,14 @@ function ProximityToast({ alert, onDismiss }) {
   );
 }
 
-// ── Search-to-Route Controller ────────────────────────────────────────────────
-function SearchRouteController({ query, userPos, onResult, onError }) {
+// ── Search controller: geocodes query → calls onDestFound with latlng ────────────
+function SearchRouteController({ query, userPos, onDestFound, onError }) {
   const map = useMap();
-  const routeLayerRef = useRef(null);
-  const destMarkerRef = useRef(null);
+  const prevMarkerRef = useRef(null);
 
   useEffect(() => {
     if (!query) return;
-
-    // Clean up previous route & marker
-    if (routeLayerRef.current) map.removeLayer(routeLayerRef.current);
-    if (destMarkerRef.current)  map.removeLayer(destMarkerRef.current);
+    if (prevMarkerRef.current) map.removeLayer(prevMarkerRef.current);
 
     fetch(
       `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=nz&limit=1`,
@@ -345,16 +341,9 @@ function SearchRouteController({ query, userPos, onResult, onError }) {
       .then(r => r.json())
       .then(data => {
         if (!data.length) { onError('No results found for that destination.'); return; }
-        const dest = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-        const origin = userPos || map.getCenter();
+        const dest = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon), name: data[0].display_name };
 
-        // Dashed animated polyline
-        routeLayerRef.current = L.polyline(
-          [[origin.lat, origin.lng], [dest.lat, dest.lng]],
-          { color: '#3b82f6', weight: 5, opacity: 0.75, dashArray: '12, 8', lineJoin: 'round' }
-        ).addTo(map);
-
-        // Destination pin
+        // Drop destination pin
         const destIcon = L.divIcon({
           className: '',
           html: `<div style="
@@ -363,25 +352,110 @@ function SearchRouteController({ query, userPos, onResult, onError }) {
             border:3px solid white;box-shadow:0 4px 16px rgba(99,102,241,0.7);
             display:flex;align-items:center;justify-content:center;
           "><span style="transform:rotate(45deg);font-size:16px;">🎯</span></div>`,
-          iconSize:   [36, 36],
-          iconAnchor: [18, 36],
-          popupAnchor:[0, -38],
+          iconSize:[36,36], iconAnchor:[18,36], popupAnchor:[0,-38],
         });
-
-        destMarkerRef.current = L.marker([dest.lat, dest.lng], { icon: destIcon })
+        prevMarkerRef.current = L.marker([dest.lat, dest.lng], { icon: destIcon })
           .addTo(map)
-          .bindPopup(`<b style="color:#3b82f6;">🎯 Destination</b><br><span style="font-size:0.85em;color:#ccc;">${data[0].display_name}</span>`)
+          .bindPopup(`<b style="color:#3b82f6;">🎯 Destination</b><br><span style="font-size:0.85em;color:#ccc;">${dest.name}</span>`)
           .openPopup();
 
-        // Cinematic fly-to
-        map.flyToBounds(routeLayerRef.current.getBounds(), { padding: [60, 60], duration: 1.5 });
-        onResult(data[0].display_name);
+        onDestFound(dest); // hand off to LiveNavController
       })
       .catch(() => onError('Geocoding failed – check your connection.'));
   }, [query]);
 
   return null;
 }
+
+// ── Live Nav Controller: OSRM routing + GPS recalculate + turn-by-turn HUD ────
+// Rendered inside MapContainer; owns the LRM control imperatively
+function LiveNavController({ dest, userPos, onTurnInfo, onArrival, active }) {
+  const map = useMap();
+  const controlRef = useRef(null);
+  const prevUserPos = useRef(null);
+
+  // Create / recreate routing control when dest changes
+  useEffect(() => {
+    if (!dest || !active) {
+      if (controlRef.current) { map.removeControl(controlRef.current); controlRef.current = null; }
+      return;
+    }
+
+    const origin = userPos || map.getCenter();
+
+    // Lazy-load LRM to avoid SSR issues
+    import('leaflet-routing-machine').then(() => {
+      if (controlRef.current) map.removeControl(controlRef.current);
+
+      controlRef.current = L.Routing.control({
+        waypoints: [
+          L.latLng(origin.lat, origin.lng),
+          L.latLng(dest.lat, dest.lng),
+        ],
+        router: L.Routing.osrmv1({
+          serviceUrl: 'https://router.project-osrm.org/route/v1',
+          profile: 'driving',
+        }),
+        lineOptions: {
+          styles: [{ color: '#3b82f6', opacity: 0.85, weight: 6 }],
+          extendToWaypoints: true,
+          missingRouteTolerance: 0,
+        },
+        show: false,           // hide default panel – we have our own HUD
+        addWaypoints: false,
+        routeWhileDragging: false,
+        fitSelectedRoutes: true,
+        showAlternatives: false,
+      }).addTo(map);
+
+      controlRef.current.on('routesfound', (e) => {
+        const route     = e.routes[0];
+        const totalKm   = (route.summary.totalDistance / 1000).toFixed(1);
+        const totalMins = Math.round(route.summary.totalTime / 60);
+        // next instruction
+        const nextStep  = route.instructions?.[0];
+        onTurnInfo({
+          totalKm, totalMins,
+          nextText: nextStep?.text || 'Follow the route',
+          nextDistM: nextStep?.distance || 0,
+        });
+      });
+
+      // Cinematic zoom to route bounds
+      controlRef.current.on('routesfound', (e) => {
+        const bounds = e.routes[0].bounds;
+        if (bounds) map.flyToBounds(bounds, { padding: [60, 60], duration: 1.4 });
+      });
+    });
+
+    return () => {
+      if (controlRef.current) { map.removeControl(controlRef.current); controlRef.current = null; }
+    };
+  }, [dest, active]);
+
+  // GPS update handler – splice waypoint 0 and check arrival
+  useEffect(() => {
+    if (!controlRef.current || !userPos || !active) return;
+
+    // Skip tiny movements < 20m
+    if (prevUserPos.current) {
+      const moved = haversine(prevUserPos.current.lat, prevUserPos.current.lng, userPos.lat, userPos.lng) * 1000;
+      if (moved < 20) return;
+    }
+    prevUserPos.current = userPos;
+
+    controlRef.current.spliceWaypoints(0, 1, L.latLng(userPos.lat, userPos.lng));
+
+    // Arrival detection: < 50 m to destination
+    if (dest) {
+      const distToDestM = haversine(userPos.lat, userPos.lng, dest.lat, dest.lng) * 1000;
+      if (distToDestM < 50) onArrival();
+    }
+  }, [userPos, active]);
+
+  return null;
+}
+
 
 // ── Main Map ──────────────────────────────────────────────────────────────────
 export default function Map({ trafficCameras, safetyCameras, filters }) {
@@ -395,6 +469,11 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
   const [pendingQuery, setPendingQuery] = useState(null);
   const [routeResult, setRouteResult]   = useState(null);
   const [routeError, setRouteError]     = useState(null);
+  // Navigation state
+  const [navDest, setNavDest]           = useState(null);   // {lat,lng,name}
+  const [navActive, setNavActive]       = useState(false);
+  const [turnInfo, setTurnInfo]         = useState(null);   // {totalKm, totalMins, nextText, nextDistM}
+  const [arrived, setArrived]           = useState(false);
   const searchRef = useRef(null);
   const mapRef = useRef(null);
 
@@ -437,6 +516,23 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
     setPendingQuery(null);
     setRouteResult(null);
     setRouteError(null);
+    setNavDest(null);
+    setNavActive(false);
+    setTurnInfo(null);
+    setArrived(false);
+  };
+
+  const startNavigation = () => {
+    if (!navDest) return;
+    setNavActive(true);
+    setArrived(false);
+    setTurnInfo(null);
+    if (!gpsEnabled) setGpsEnabled(true); // auto-enable GPS
+  };
+
+  const stopNavigation = () => {
+    setNavActive(false);
+    setTurnInfo(null);
   };
 
   return (
@@ -447,10 +543,7 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
       )}
 
       {/* ── Search Bar ───────────────────────────────────────────────────── */}
-      <div style={{
-        position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)',
-        zIndex: 1000, width: '90%', maxWidth: '440px',
-      }}>
+      <div className="search-bar-container">
         <div className="glass-panel" style={{
           borderRadius: '999px',
           display: 'flex', alignItems: 'center', gap: '8px',
@@ -489,15 +582,27 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
         </div>
 
         {/* Result / Error feedback */}
-        {routeResult && (
+        {routeResult && !navActive && (
           <div style={{
             marginTop: '8px', background: 'rgba(16,185,129,0.15)',
             border: '1px solid rgba(16,185,129,0.4)', borderRadius: '12px',
             padding: '8px 14px', fontSize: '0.8em', color: '#10b981',
-            display: 'flex', gap: '6px', alignItems: 'center',
+            display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'space-between',
           }}>
-            <Route size={14}/>
-            <span>Route to <strong style={{ color: 'white' }}>{routeResult.substring(0, 50)}…</strong></span>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <Route size={14}/>
+              <span>Found: <strong style={{ color: 'white' }}>{routeResult.substring(0, 40)}…</strong></span>
+            </div>
+            <button
+              onClick={startNavigation}
+              style={{
+                background: 'var(--primary)', borderRadius: '999px',
+                padding: '4px 12px', fontSize: '0.8em', fontWeight: 700,
+                color: 'white', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0,
+              }}
+            >
+              <Navigation size={12}/> Start
+            </button>
           </div>
         )}
         {routeError && (
@@ -512,7 +617,7 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
       </div>
 
       {/* FAB Group */}
-      <div className="fab-group">
+      <div className={`fab-group ${navActive ? 'nav-active' : ''}`}>
         {/* GPS Toggle */}
         <button
           title={gpsEnabled ? 'Disable GPS' : 'Enable GPS'}
@@ -544,6 +649,18 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
           </button>
         )}
 
+        {/* Stop Navigation FAB */}
+        {navActive && (
+          <button
+            title="Stop Navigation"
+            onClick={stopNavigation}
+            className="fab-btn glass-panel"
+            style={{ background: 'rgba(239,68,68,0.3)' }}
+          >
+            <XIcon size={20} color="#ef4444" />
+          </button>
+        )}
+
         {/* Re-center on user */}
         {gpsEnabled && userPos && (
           <button
@@ -565,6 +682,71 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
           boxShadow: '0 4px 20px rgba(0,0,0,0.6)', pointerEvents: 'none',
         }}>
           📍 Tap anywhere on the map to drop a waypoint · Right-click also works
+        </div>
+      )}
+
+      {/* ── Turn-by-Turn HUD ──────────────────────────────────────────────── */}
+      {navActive && turnInfo && !arrived && (
+        <div className="glass-panel turn-hud">
+          {/* Next turn */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
+            <div style={{ background: 'rgba(59,130,246,0.2)', padding: '10px', borderRadius: '50%', flexShrink: 0 }}>
+              <CornerUpRight size={24} color="var(--primary)" />
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '0.95em', fontWeight: 700, color: 'white', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {turnInfo.nextText}
+              </div>
+              {turnInfo.nextDistM > 0 && (
+                <div style={{ fontSize: '0.75em', color: '#aaa', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>in {turnInfo.nextDistM > 1000 ? `${(turnInfo.nextDistM/1000).toFixed(1)} km` : `${Math.round(turnInfo.nextDistM)} m`}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#555' }}>
+                    <span className="pulse-dot" style={{ width: 6, height: 6 }} /> Live
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+          
+          <div style={{ width: '1px', height: '40px', background: 'var(--glass-border)', flexShrink: 0 }} />
+          
+          {/* Journey summary */}
+          <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexShrink: 0 }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '1.2em', fontWeight: 800, color: 'white' }}>{turnInfo.totalMins}</div>
+              <div style={{ fontSize: '0.65em', color: '#888', textTransform: 'uppercase', letterSpacing: '1px' }}>min</div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '1.2em', fontWeight: 800, color: 'white' }}>{turnInfo.totalKm}</div>
+              <div style={{ fontSize: '0.65em', color: '#888', textTransform: 'uppercase', letterSpacing: '1px' }}>km</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Arrival Celebration ────────────────────────────────────────────── */}
+      {arrived && (
+        <div className="glass-panel" style={{
+          position: 'absolute', top: '50%', left: '50%',
+          transform: 'translate(-50%, -50%)',
+          zIndex: 1010, borderRadius: '24px', padding: '32px 40px',
+          textAlign: 'center', border: '1px solid rgba(16,185,129,0.5)',
+          minWidth: '260px', animation: 'slideInRight 0.5s ease',
+        }}>
+          <CheckCircle2 size={52} color="var(--accent)" style={{ marginBottom: '16px' }} />
+          <div style={{ fontSize: '1.4em', fontWeight: 800, color: 'white', marginBottom: '6px' }}>Arrived!</div>
+          <div style={{ fontSize: '0.85em', color: '#888', marginBottom: '20px' }}>
+            You have reached <strong style={{ color: '#ccc' }}>{navDest?.name?.substring(0, 40)}</strong>
+          </div>
+          <button
+            onClick={() => { setArrived(false); stopNavigation(); clearSearch(); }}
+            style={{
+              background: 'var(--accent)', color: 'white', borderRadius: '999px',
+              padding: '10px 24px', fontWeight: 700, fontSize: '0.9em',
+            }}
+          >
+            Done
+          </button>
         </div>
       )}
 
@@ -600,8 +782,19 @@ export default function Map({ trafficCameras, safetyCameras, filters }) {
           <SearchRouteController
             query={pendingQuery}
             userPos={userPos}
-            onResult={(name) => setRouteResult(name)}
+            onDestFound={(dest) => { setNavDest(dest); setRouteResult(dest.name); }}
             onError={(msg) => setRouteError(msg)}
+          />
+        )}
+
+        {/* Live Navigation controller */}
+        {navDest && (
+          <LiveNavController
+            dest={navDest}
+            userPos={userPos}
+            active={navActive}
+            onTurnInfo={setTurnInfo}
+            onArrival={() => setArrived(true)}
           />
         )}
 
